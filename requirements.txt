@@ -5,3 +5,5 @@ faiss-cpu
 groq
 python-multipart
 numpy
+transformers
+tokenizers
