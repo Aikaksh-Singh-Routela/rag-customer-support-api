@@ -1,12 +1,13 @@
 """
 RAG Customer Support API - FastAPI Implementation
+Uses fastembed for lightweight, memory-efficient embeddings
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 import faiss
 import numpy as np
 from groq import Groq
@@ -16,14 +17,16 @@ from datetime import datetime
 # ============================================
 # CONFIGURATION
 # ============================================
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+if not GROQ_API_KEY:
+    print("⚠️ WARNING: GROQ_API_KEY environment variable not set!")
 
 # Initialize Groq client
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Initialize embedding model
-print("🔄 Loading embedding model...")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# Initialize lightweight embedding model (no PyTorch!)
+print("🔄 Loading fastembed model (lightweight)...")
+embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 print("✅ Embedding model loaded")
 
 # Knowledge base documents
@@ -42,10 +45,10 @@ documents = [
 
 # Create embeddings and FAISS index
 print("🔄 Creating embeddings and search index...")
-embeddings = embedding_model.encode(documents)
-dimension = embeddings.shape[1]
+document_embeddings = np.array(list(embedding_model.embed(documents)))
+dimension = document_embeddings.shape[1]
 index = faiss.IndexFlatL2(dimension)
-index.add(embeddings.astype('float32'))
+index.add(document_embeddings.astype('float32'))
 print(f"✅ FAISS index created with {index.ntotal} documents")
 
 # Create FastAPI app
@@ -88,7 +91,7 @@ class HealthResponse(BaseModel):
 # ============================================
 def search(query: str, k: int = 3):
     """Find the k most relevant documents for a query"""
-    query_embedding = embedding_model.encode([query])
+    query_embedding = np.array(list(embedding_model.query_embed(query))[0])
     distances, indices = index.search(query_embedding.astype('float32'), k)
     
     results = []
@@ -103,6 +106,8 @@ def search(query: str, k: int = 3):
 
 def generate_answer(question: str, context_docs: List[dict]) -> str:
     """Generate a natural answer using Groq LLM"""
+    if not client:
+        return "API key not configured. Please set GROQ_API_KEY environment variable."
     
     context = "\n\n".join([f"Source {i+1}: {doc['content']}" for i, doc in enumerate(context_docs)])
     
@@ -116,14 +121,16 @@ Customer: {question}
 
 Answer concisely (2-3 sentences). Be helpful and friendly."""
 
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=200
-    )
-    
-    return completion.choices[0].message.content
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"Error generating answer: {str(e)}"
 
 # ============================================
 # API ENDPOINTS

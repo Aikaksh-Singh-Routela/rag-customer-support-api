@@ -1,9 +1,6 @@
 fastapi
 uvicorn
-sentence-transformers
-faiss-cpu
+fastembed
 groq
 python-multipart
 numpy
-transformers
-tokenizers
