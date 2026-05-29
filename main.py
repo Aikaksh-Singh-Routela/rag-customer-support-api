@@ -90,9 +90,10 @@ class HealthResponse(BaseModel):
 # HELPER FUNCTIONS
 # ============================================
 def search(query: str, k: int = 3):
-    """Find the k most relevant documents for a query"""
     query_embedding = np.array(list(embedding_model.query_embed(query))[0])
-    distances, indices = index.search(query_embedding.astype('float32'), k)
+    # FAISS expects a 2D array: reshape from (384,) to (1, 384)
+    query_embedding = query_embedding.reshape(1, -1).astype('float32')
+    distances, indices = index.search(query_embedding, k)
     
     results = []
     for idx, dist in zip(indices[0], distances[0]):

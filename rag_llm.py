@@ -47,7 +47,9 @@ print(f"✅ Built search index with {index.ntotal} vectors\n")
 
 def search(query, k=3):
     query_embedding = np.array(list(embedding_model.query_embed(query))[0])
-    distances, indices = index.search(query_embedding.astype('float32'), k)
+    # FAISS expects a 2D array: reshape from (384,) to (1, 384)
+    query_embedding = query_embedding.reshape(1, -1).astype('float32')
+    distances, indices = index.search(query_embedding, k)
     
     results = []
     for idx, dist in zip(indices[0], distances[0]):
