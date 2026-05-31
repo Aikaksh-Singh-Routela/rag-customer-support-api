@@ -1,15 +1,14 @@
-import os
-import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+import os
+import uvicorn
 import numpy as np
 from fastembed import TextEmbedding
 import faiss
 from groq import Groq
 from datetime import datetime
-import pickle
 from loguru import logger
 import time
 from collections import defaultdict
@@ -121,7 +120,7 @@ async def lifespan(app: FastAPI):
     logger.info("👋 RAG Customer Support API shutting down...")
     logger.info(f"Final metrics: {metrics['total_requests']} requests processed")
 
-app = FastAPI(title="RAG Customer Support API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="RAG Customer Support API", version="3.0.0", lifespan=lifespan)
 
 # CORS middleware
 app.add_middleware(
@@ -137,7 +136,7 @@ app.add_middleware(
 # ============================================
 @app.get("/")
 async def root():
-    logger.info("Health check endpoint called")
+    logger.info("Root endpoint called")
     return {"message": "RAG Customer Support API", "status": "running", "model": GROQ_MODEL}
 
 @app.post("/ask", response_model=QueryResponse)
@@ -194,9 +193,13 @@ async def ask_question(request: QueryRequest):
         logger.error(f"[{request_id}] Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for monitoring"""
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check(request: Request = None):
+    """Health check endpoint for monitoring (supports both GET and HEAD)"""
+    # If it's a HEAD request, return empty response
+    if request and request.method == "HEAD":
+        return Response(status_code=200)
+    
     return {
         "status": "healthy",
         "model": GROQ_MODEL,
@@ -228,8 +231,8 @@ async def get_detailed_metrics():
         "total_requests": metrics["total_requests"],
         "total_errors": metrics["total_errors"],
         "error_rate": metrics["total_errors"] / max(metrics["total_requests"], 1),
-        "avg_confidence": avg_conf,
-        "avg_response_time": avg_time,
+        "avg_confidence": float(avg_conf),
+        "avg_response_time": float(avg_time),
         "queries_by_hour": dict(metrics["queries_by_hour"]),
         "uptime": "running",
     }
