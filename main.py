@@ -1,64 +1,19 @@
-"""
-RAG Customer Support API - FastAPI Implementation
-Uses fastembed for lightweight, memory-efficient embeddings
-"""
-
+import os
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+import numpy as np
 from fastembed import TextEmbedding
 import faiss
-import numpy as np
 from groq import Groq
-import os
 from datetime import datetime
+import pickle
 
-# ============================================
-# CONFIGURATION
-# ============================================
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-if not GROQ_API_KEY:
-    print("⚠️ WARNING: GROQ_API_KEY environment variable not set!")
+app = FastAPI(title="RAG Customer Support API", version="2.0.0")
 
-# Initialize Groq client
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
-# Initialize lightweight embedding model (no PyTorch!)
-print("🔄 Loading fastembed model (lightweight)...")
-embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-print("✅ Embedding model loaded")
-
-# Knowledge base documents
-documents = [
-    "Our return policy allows returns within 30 days of purchase with original receipt.",
-    "To return an item, visit any store location or use our prepaid shipping label.",
-    "Shipping is free on orders over $50. Standard shipping takes 3-5 business days.",
-    "Customer support is available 24/7 via live chat and email at support@example.com.",
-    "We offer a 1-year warranty on all electronics. Warranty covers manufacturing defects.",
-    "You can track your order using the tracking number sent to your email.",
-    "Gift cards never expire and can be used online or in stores.",
-    "Price match guarantee: We'll match any competitor's price within 14 days of purchase.",
-    "Need to cancel an order? Contact us within 2 hours of placing the order.",
-    "Join our loyalty program to earn points on every purchase - 100 points = $1 off."
-]
-
-# Create embeddings and FAISS index
-print("🔄 Creating embeddings and search index...")
-document_embeddings = np.array(list(embedding_model.embed(documents)))
-dimension = document_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(document_embeddings.astype('float32'))
-print(f"✅ FAISS index created with {index.ntotal} documents")
-
-# Create FastAPI app
-app = FastAPI(
-    title="RAG Customer Support API",
-    description="AI-powered customer support that answers questions based on your knowledge base",
-    version="1.0.0"
-)
-
-# Add CORS middleware
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -68,123 +23,112 @@ app.add_middleware(
 )
 
 # ============================================
-# PYDANTIC MODELS
+# MODEL CONFIGURATION (UPDATED)
 # ============================================
-class QuestionRequest(BaseModel):
+GROQ_MODEL = "llama-3.3-70b-versatile"  # Updated from deprecated llama3-70b-8192
+
+# ============================================
+# REQUEST/RESPONSE MODELS
+# ============================================
+class QueryRequest(BaseModel):
     question: str
 
-class AnswerResponse(BaseModel):
+class QueryResponse(BaseModel):
     question: str
     answer: str
     sources: List[str]
     confidence_scores: List[float]
     timestamp: str
 
-class HealthResponse(BaseModel):
-    status: str
-    documents_loaded: int
-    index_size: int
-    model_loaded: bool
+# ============================================
+# KNOWLEDGE BASE
+# ============================================
+KNOWLEDGE_BASE = [
+    "Our return policy allows returns within 30 days of purchase with original receipt.",
+    "To return an item, visit any store location or use our prepaid shipping label.",
+    "Need to cancel an order? Contact us within 2 hours of placing the order.",
+    "Password must be at least 12 characters with uppercase, lowercase, numbers, and special characters.",
+    "Accounts lock for 15 minutes after 5 failed login attempts.",
+    "API tokens expire after 30 minutes. Get a new token by logging in again.",
+]
 
 # ============================================
-# HELPER FUNCTIONS
+# INITIALIZE EMBEDDINGS AND FAISS
 # ============================================
-def search(query: str, k: int = 3):
-    query_embedding = np.array(list(embedding_model.query_embed(query))[0])
-    # FAISS expects a 2D array: reshape from (384,) to (1, 384)
-    query_embedding = query_embedding.reshape(1, -1).astype('float32')
-    distances, indices = index.search(query_embedding, k)
-    
-    results = []
-    for idx, dist in zip(indices[0], distances[0]):
-        similarity = 1 / (1 + dist)
-        results.append({
-            "content": documents[idx],
-            "similarity": similarity,
-            "index": idx
-        })
-    return results
+embedding_model = TextEmbedding(model="BAAI/bge-small-en-v1.5")
 
-def generate_answer(question: str, context_docs: List[dict]) -> str:
-    """Generate a natural answer using Groq LLM"""
-    if not client:
-        return "API key not configured. Please set GROQ_API_KEY environment variable."
-    
-    context = "\n\n".join([f"Source {i+1}: {doc['content']}" for i, doc in enumerate(context_docs)])
-    
-    prompt = f"""You are a friendly, helpful customer support assistant.
+# Create embeddings for knowledge base
+embeddings = list(embedding_model.embed(KNOWLEDGE_BASE))
+embeddings_array = np.array([e for e in embeddings], dtype=np.float32)
 
-Use ONLY this information to answer:
+# Build FAISS index
+dimension = embeddings_array.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(embeddings_array)
 
-{context}
+# ============================================
+# GROQ CLIENT
+# ============================================
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-Customer: {question}
-
-Answer concisely (2-3 sentences). Be helpful and friendly."""
-
+def get_groq_answer(question: str, context: str) -> str:
+    """Generate answer using Groq Llama 3.3"""
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
+        completion = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a helpful customer support assistant. Answer based on the provided context. Be concise and helpful."},
+                {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}"}
+            ],
             temperature=0.7,
-            max_tokens=200
+            max_tokens=500,
         )
         return completion.choices[0].message.content
     except Exception as e:
-        return f"Error generating answer: {str(e)}"
+        return f"Error: {str(e)}"
 
 # ============================================
 # API ENDPOINTS
 # ============================================
-@app.get("/", response_model=dict)
-def root():
-    return {
-        "message": "RAG Customer Support API",
-        "docs": "/docs",
-        "health": "/health"
-    }
+@app.get("/")
+async def root():
+    return {"message": "RAG Customer Support API", "status": "running", "model": GROQ_MODEL}
 
-@app.post("/ask", response_model=AnswerResponse)
-def ask_question(request: QuestionRequest):
-    relevant_docs = search(request.question, k=3)
+@app.post("/ask", response_model=QueryResponse)
+async def ask_question(request: QueryRequest):
+    """Ask a question and get an AI-powered answer"""
     
-    if not relevant_docs or relevant_docs[0]["similarity"] < 0.3:
-        return AnswerResponse(
-            question=request.question,
-            answer="I couldn't find relevant information in our knowledge base.",
-            sources=[],
-            confidence_scores=[],
-            timestamp=datetime.now().isoformat()
-        )
+    # Create query embedding
+    query_embedding = list(embedding_model.embed([request.question]))[0]
+    query_embedding_array = np.array([query_embedding], dtype=np.float32)
     
-    answer = generate_answer(request.question, relevant_docs)
+    # Search FAISS
+    distances, indices = index.search(query_embedding_array, k=3)
     
-    return AnswerResponse(
+    # Get relevant sources
+    sources = [KNOWLEDGE_BASE[idx] for idx in indices[0]]
+    
+    # Calculate confidence (1 - normalized distance)
+    max_distance = np.max(distances[0]) if len(distances[0]) > 0 else 1
+    confidence_scores = [1 - (d / (max_distance + 1e-6)) for d in distances[0]]
+    
+    # Build context from sources
+    context = "\n".join(sources)
+    
+    # Generate answer using Groq
+    answer = get_groq_answer(request.question, context)
+    
+    return QueryResponse(
         question=request.question,
         answer=answer,
-        sources=[doc["content"] for doc in relevant_docs],
-        confidence_scores=[doc["similarity"] for doc in relevant_docs],
-        timestamp=datetime.now().isoformat()
+        sources=sources,
+        confidence_scores=confidence_scores,
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
-@app.get("/health", response_model=HealthResponse)
-def health_check():
-    return HealthResponse(
-        status="healthy",
-        documents_loaded=len(documents),
-        index_size=index.ntotal,
-        model_loaded=True
-    )
-
-@app.get("/documents", response_model=List[str])
-def list_documents():
-    return documents
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "model": GROQ_MODEL, "kb_size": len(KNOWLEDGE_BASE)}
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    print(f"\n🚀 Starting RAG Customer Support API on port {port}")
-    print(f"📚 Loaded {len(documents)} documents")
-    print(f"📖 API Documentation: http://localhost:{port}/docs")
-    print("="*50)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
