@@ -9,8 +9,6 @@
 [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Logging](https://img.shields.io/badge/Logging-Loguru-FFB300)](https://github.com/Delgan/loguru)
 
-[![Uptime](https://img.shields.io/uptimerobot/status/m796123695-722afc56c95c9a0c9c8c8e11?label=API%20Status)](https://stats.uptimerobot.com/your-status-page)
-[![Uptime Ratio](https://img.shields.io/uptimerobot/ratio/m796123695-722afc56c95c9a0c9c8c8e11?label=Uptime)](https://stats.uptimerobot.com/your-status-page)
 
 Production-ready RAG (Retrieval-Augmented Generation) API with **FAISS vector search**, **Groq Llama 3.3 70B LLM**, **Docker containerization**, and **full production monitoring**.
 
