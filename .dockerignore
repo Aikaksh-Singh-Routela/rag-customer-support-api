@@ -3,9 +3,7 @@ __pycache__
 .env
 chroma_db/
 .git/
-.gitignore
 .DS_Store
 *.log
 test.json
 .python-version
-README.md
